@@ -50,6 +50,7 @@ export const signup = asyncHandler(async (req, res) => {
   }
 
   let photo = "";
+  let photoFileId = "";
   if (req.file) {
     const imageKitResponse = await imageKit.upload({
       file: req.file.buffer,
@@ -58,6 +59,7 @@ export const signup = asyncHandler(async (req, res) => {
     });
 
     photo = imageKitResponse.url;
+    photoFileId = imageKitResponse.fileId;
   }
 
   const hashedPassword = await hashPassword(password);
@@ -76,6 +78,7 @@ export const signup = asyncHandler(async (req, res) => {
       phone,
       gender,
       photo,
+      photoFileId,
     },
     expiresAt: new Date(Date.now() + 5 * 60 * 1000),
   });
@@ -125,7 +128,7 @@ export const verifyOTP = asyncHandler(async (req, res) => {
 
     const newUser = await User.create({
       email: otpRecord.email,
-      ...otpRecord.userData,
+      ...otpRecord.userData.toObject(),
     });
 
     await OTP.deleteOne({ _id: otpRecord._id });
@@ -262,7 +265,7 @@ export const passwordChange = asyncHandler(async (req, res) => {
     return res.status(404).json(errorResponse("User not found"));
   }
 
-  const isNewPasswordValid = await isValidPassword(newPassword);
+  const isNewPasswordValid = isValidPassword(newPassword);
 
   const isOldPasswordCorrect = await verifyPassword(oldPassword, user.password);
 
@@ -302,17 +305,102 @@ export const refreshToken = asyncHandler(async (req, res) => {
     return res.status(400).json(errorResponse("Refresh token is required"));
   }
 
-  const decoded = jwt.decode(refreshToken, process.env.JWT_REFRESH_SECRET);
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
 
-  const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id);
 
-  if (!user || user.refreshToken !== refreshToken) {
-    return res.status(401).json(errorResponse("Invalid refresh token"));
+    if (!user || user.refreshToken !== refreshToken) {
+      return res.status(401).json(errorResponse("Invalid refresh token"));
+    }
+
+    const accessToken = generateAccessToken(user._id);
+
+    return res
+      .status(200)
+      .json(successResponse("Access token generated", { accessToken }));
+  } catch (error) {
+    return res.status(401).json(errorResponse("Invalid or expired refresh token"));
+  }
+});
+
+export const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json(errorResponse("Email is required"));
   }
 
-  const accessToken = generateAccessToken(user._id);
+  const user = await User.findOne({ email });
 
-  return res
-    .status(200)
-    .json(successResponse("Access token generated", { accessToken }));
+  if (!user) {
+    return res.status(404).json(errorResponse("User not found"));
+  }
+
+  const otp = generateOTP();
+
+  await OTP.deleteMany({ email, purpose: "forgot-password" });
+
+  await OTP.create({
+    email,
+    otp,
+    purpose: "forgot-password",
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+  });
+
+  await sendOTPToEmail(email, otp);
+
+  return res.status(200).json(successResponse("OTP sent successfully"));
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json(errorResponse("Email, OTP, and new password are required"));
+  }
+
+  if (!isValidPassword(newPassword)) {
+    return res.status(400).json(errorResponse("Password must be at least 8 characters long"));
+  }
+
+  const otpRecord = await OTP.findOne({ email, otp, purpose: "forgot-password" });
+
+  if (!otpRecord) {
+    return res.status(400).json(errorResponse("Invalid OTP"));
+  }
+
+  if (!otpRecord.verified) {
+    return res.status(400).json(errorResponse("OTP has not been verified yet"));
+  }
+
+  if (otpRecord.expiresAt < new Date()) {
+    await OTP.deleteOne({ _id: otpRecord._id });
+    return res.status(400).json(errorResponse("OTP has expired"));
+  }
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    return res.status(404).json(errorResponse("User not found"));
+  }
+
+  const hashedPassword = await hashPassword(newPassword);
+  user.password = hashedPassword;
+  user.refreshToken = ""; // Invalidate refresh tokens on password reset
+  await user.save();
+
+  await OTP.deleteOne({ _id: otpRecord._id });
+
+  return res.status(200).json(successResponse("Password reset successfully"));
+});
+
+export const logout = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (user) {
+    user.refreshToken = "";
+    await user.save();
+  }
+
+  return res.status(200).json(successResponse("Logout successful"));
 });

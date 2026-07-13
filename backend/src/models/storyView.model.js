@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const storyViewSchema = new mongoose.Schema({
-  type: {
+  story: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Story",
   },

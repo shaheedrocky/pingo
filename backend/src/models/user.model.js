@@ -47,6 +47,36 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    photoFileId: {
+      type: String,
+      default: "",
+    },
+    isPremiumUser:{
+      type:Boolean,
+      default: false
+    },
+    blockedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    privacy: {
+      lastSeen: {
+        type: String,
+        enum: ["everyone", "contacts", "nobody"],
+        default: "everyone",
+      },
+      profilePhoto: {
+        type: String,
+        enum: ["everyone", "contacts", "nobody"],
+        default: "everyone",
+      },
+      readReceipts: {
+        type: Boolean,
+        default: true,
+      },
+    }
   },
   {
     timestamps: true,
